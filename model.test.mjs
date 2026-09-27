@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {summary,noResponse,validateMission,safeURL,routeCommand,upsertMessage,safeText} from './model.js';
+import {createServer} from './server.mjs';
+const now=new Date('2026-09-27T18:00:00Z');
+const receipt={id:'1',company:'Example',title:'Role',outcome:'submitted',confirmed:true,submitted:'2026-09-01',evidence:'https://example.com/receipt'};
+test('CAPTCHA and unconfirmed do not inflate submissions',()=>{const r=summary([receipt,{outcome:'submission unconfirmed',confirmed:false,blocker:'CAPTCHA'}],now);assert.equal(r.confirmed,1);assert.equal(r.unconfirmed,1)});
+test('silence is a follow-up, not a rejection',()=>{const r=summary([receipt],now);assert.equal(r.noResponse,1);assert.equal(r.rejected,0)});
+test('rejected and withdrawn are excluded from open follow-ups',()=>{assert.equal(noResponse({...receipt,outcome:'rejected'},now),false);assert.equal(noResponse({...receipt,outcome:'withdrawn'},now),false)});
+test('receipt does not count as a human response',()=>{assert.equal(summary([receipt],now).humanResponses,0);assert.equal(summary([{...receipt,humanResponse:'2026-09-10'}],now).humanResponses,1)});
+test('empty cohort has no percentage',()=>assert.equal(summary([]).rate,null));
+test('confirmation requires date and evidence',()=>assert.throws(()=>validateMission({...receipt,evidence:''}),/evidence/));
+test('unconfirmed cannot carry a confirmation flag',()=>assert.throws(()=>validateMission({...receipt,outcome:'submission unconfirmed'}),/cannot/));
+test('unsafe URLs and text are blocked or escaped',()=>{assert.equal(safeURL('javascript:alert(1)'),null);assert.equal(safeText('<img onerror="x">'),'&lt;img onerror=&quot;x&quot;&gt;')});
+test('commands find uncertain applications, not success',()=>assert.equal(routeCommand('show unconfirmed applications').route,'missions?filter=unconfirmed'));
+test('message IDs deduplicate retry insertion',()=>assert.equal(upsertMessage([{id:'same'}],{id:'same'}).length,1));
+test('unconfigured API fails closed and cannot serve server files',async()=>{const server=createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));try{const base='http://127.0.0.1:'+server.address().port;assert.equal((await fetch(base+'/api/workspace')).status,503);assert.equal((await fetch(base+'/.env')).status,404);assert.equal((await fetch(base+'/server/index.js')).status,404);assert.equal((await fetch(base+'/api/workspace',{method:'POST'})).status,405)}finally{await new Promise(r=>server.close(r))}});
